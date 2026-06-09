@@ -8,16 +8,16 @@ from typing import Dict
 class TrainConfig:
     """Training hyperparameters — Paper §3.4."""
 
-    lr: float = 0.001          # Paper §3.4
-    lr_step: int = 5000        # Paper §3.4 — divide lr by 10 every N iterations
-    lr_gamma: float = 0.1      # Paper §3.4 ("divide by 10")
-    total_iters: int = 15000   # Paper §3.4
-    batch_size: int = 2        # ⚠️ not in paper — GPU memory constraint (🟡)
-    num_workers: int = 2       # ⚠️ not in paper (🟢)
-    save_every: int = 1000     # ⚠️ not in paper — checkpoint cadence (🟢)
-    log_every: int = 50        # ⚠️ not in paper — log cadence (🟢)
+    lr: float = 0.001  # Paper §3.4
+    lr_step: int = 5000  # Paper §3.4 — divide lr by 10 every N iterations
+    lr_gamma: float = 0.1  # Paper §3.4 ("divide by 10")
+    total_iters: int = 15000  # Paper §3.4
+    batch_size: int = 2  # ⚠️ not in paper — GPU memory constraint (🟡)
+    num_workers: int = 2  # ⚠️ not in paper (🟢)
+    save_every: int = 1000  # ⚠️ not in paper — checkpoint cadence (🟢)
+    log_every: int = 50  # ⚠️ not in paper — log cadence (🟢)
     checkpoint_dir: str = "checkpoints"
-    split: str = "train"       # which YouTube-VOS split to train on
+    split: str = "train"  # which YouTube-VOS split to train on
 
 
 @dataclass
@@ -45,7 +45,7 @@ class DataConfig:
     """Paths and data-loading settings."""
 
     word2vec_model: str = "word2vec-google-news-300"
-    i3d_weights_path: str = "weights/rgb_imagenet.pt"
+    i3d_weights_path: str = "external/pytorch-i3d/models/rgb_imagenet.pt"
     pytorch_i3d_path: str = "external/pytorch-i3d"
 
     youtube_vos_root: str = "data/youtube-vos-2019"

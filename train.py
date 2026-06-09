@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from config import Config, DataConfig, ModelConfig, TrainConfig
+from config import Config
 from data.dataset import YouTubeVOSDataset
 from data.preprocessing import load_word2vec
 from model.model import build_model

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, List, Tuple
 
 import torch
 import torch.nn as nn
@@ -49,7 +49,7 @@ def predict(
     frame_size: int = 512,
     max_len: int = 20,
     device: str = "cpu",
-) -> Dict[int, Tensor]:
+) -> Tuple[Dict[int, Tensor], List[str]]:
     """
     End-to-end forward pass on one video folder + sentence.
 
@@ -64,7 +64,7 @@ def predict(
     model.eval()
     model.to(device)
 
-    video_tensor, _ = load_video_frames(video_dir, num_frames, frame_size)
+    video_tensor, frame_paths = load_video_frames(video_dir, num_frames, frame_size)
     video_tensor = video_tensor.to(device)
 
     emb = sentence_to_embedding(sentence, word2vec_model, max_len)
@@ -73,4 +73,4 @@ def predict(
     with torch.no_grad():
         responses = model(video_tensor, emb)
 
-    return responses
+    return responses, frame_paths

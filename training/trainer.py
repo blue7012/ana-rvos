@@ -166,7 +166,7 @@ class Trainer:
         """
         model.eval()
         total, count = 0.0, 0
-        for video, embedding, mask in loader:
+        for video, embedding, mask in tqdm(loader, desc="Validating", leave=False):
             video = video.to(device)
             embedding = embedding.to(device)
             mask = mask.to(device)
