@@ -341,15 +341,6 @@ python infer.py --video data/sample.mp4 --sentence "a man running" --checkpoint 
 2. **Hu, R., Rohrbach, M., & Darrell, T.** (2016).  
    *Segmentation from Natural Language Expressions*. ECCV 2016.  
    https://arxiv.org/abs/1603.06180
-
-3. **Carreira, J., & Zisserman, A.** (2017).  
-   *Quo Vadis, Action Recognition? A New Model and Large-Scale Datasets*. CVPR 2017.  
-   https://arxiv.org/abs/1705.07971
-
-4. **Xu, B., Fu, Y., Jiang, Y. G., Li, B., & Sigal, L.** (2015).  
-   *Actor and Action Video Segmentation from a Sentence*. CVPR 2015.  
-   (A2D Dataset Paper) https://arxiv.org/abs/1411.4928
-
 ---
 
 **Status**: Phase 1 Ready (Config & Structure)  

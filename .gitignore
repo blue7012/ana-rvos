@@ -1,3 +1,8 @@
 data/youtube-vos-2019
 .claude/
 CLAUDE.md
+external/pytorch-i3d/
+weights/
+__pycache__/
+*.pyc
+.pytest_cache/
