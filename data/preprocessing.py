@@ -27,7 +27,9 @@ def load_word2vec(model_name: str = "word2vec-google-news-300"):
 
     logger.info("Downloading Word2Vec (%s) — ~1.5 GB, runs once ...", model_name)
     model = api.load(model_name)
-    logger.info("Word2Vec loaded: vocab=%s dim=%s", f"{len(model):,}", model.vector_size)
+    logger.info(
+        "Word2Vec loaded: vocab=%s dim=%s", f"{len(model):,}", model.vector_size
+    )
     return model
 
 
@@ -57,21 +59,88 @@ def sentence_to_embedding(
     return torch.from_numpy(matrix)
 
 
+def _frames_to_tensor(paths: List[str], frame_size: int) -> torch.Tensor:
+    """
+    Load JPEG paths → (1, 3, N, H, W) float tensor in [-1, 1] (I3D norm).
+    """
+    frames = []
+    for path in paths:
+        img = Image.open(path).convert("RGB")
+        img = img.resize((frame_size, frame_size), Image.BILINEAR)
+        arr = np.array(img, dtype=np.float32) / 255.0
+        arr = arr * 2.0 - 1.0
+        frames.append(arr)
+
+    video = np.stack(frames)  # (N, H, W, 3)
+    video = video.transpose(3, 0, 1, 2)  # (3, N, H, W)
+    return torch.from_numpy(video).unsqueeze(0)
+
+
+def dense_window_indices(
+    num_total: int, center_idx: int, num_frames: int
+) -> np.ndarray:
+    """
+    Indices of `num_frames` CONSECUTIVE frames centered on `center_idx`,
+    clamped at the video boundaries (edge frames repeat). Paper §3.4 / §5.2:
+    "16 frames around the frame to be segmented".
+
+    Args:
+        num_total:  total frames available in the video
+        center_idx: index of the frame to be segmented
+        num_frames: window length N
+    Returns:
+        (num_frames,) int array; window[num_frames // 2] == center_idx
+        whenever the window fits inside the video
+    """
+    half = num_frames // 2
+    start = center_idx - half
+    return np.clip(np.arange(start, start + num_frames), 0, num_total - 1)
+
+
+def load_clip_around_frame(
+    video_dir: str,
+    center_idx: int,
+    num_frames: int = 16,
+    frame_size: int = 512,
+) -> Tuple[torch.Tensor, List[str]]:
+    """
+    Load a dense clip of N consecutive frames around one frame — the
+    paper-faithful input for segmenting that frame.
+
+    Args:
+        video_dir:  path to folder with *.jpg frames
+        center_idx: index (into the sorted frame list) of the target frame
+        num_frames: window length N (paper: 16)
+        frame_size: resize to (frame_size, frame_size)
+    Returns:
+        video: (1, 3, N, H, W) values in [-1, 1]
+        paths: the selected file paths (center frame at position N // 2)
+    """
+    all_paths = sorted(glob.glob(os.path.join(video_dir, "*.jpg")))
+    if not all_paths:
+        raise FileNotFoundError(f"No .jpg files in: {video_dir}")
+    if not 0 <= center_idx < len(all_paths):
+        raise IndexError(
+            f"center_idx {center_idx} out of range for {len(all_paths)} frames"
+        )
+
+    indices = dense_window_indices(len(all_paths), center_idx, num_frames)
+    selected = [all_paths[i] for i in indices]
+    return _frames_to_tensor(selected, frame_size), selected
+
+
 def load_video_frames(
     video_dir: str,
     num_frames: int = 16,
     frame_size: int = 512,
 ) -> Tuple[torch.Tensor, List[str]]:
     """
-    Load N evenly-spaced JPEG frames from one video folder. Paper Sec 5.1 (N=16).
+    DEPRECATED for training/inference — kept only for old notebook cells.
 
-    Args:
-        video_dir: path to folder with *.jpg frames
-        num_frames: number of frames to sample
-        frame_size: resize to (frame_size, frame_size)
-    Returns:
-        video: (1, 3, N, H, W) values in [-1, 1]
-        paths: list of selected file paths
+    Loads N evenly-spaced (sparse) frames across the whole video. This does
+    NOT match the paper, which uses dense consecutive clips around the frame
+    to be segmented (see `load_clip_around_frame`). Sparse frames break the
+    temporal continuity that I3D's 3D convolutions rely on.
     """
     all_paths = sorted(glob.glob(os.path.join(video_dir, "*.jpg")))
     if not all_paths:
@@ -79,21 +148,11 @@ def load_video_frames(
 
     indices = np.linspace(0, len(all_paths) - 1, num_frames, dtype=int)
     selected = [all_paths[i] for i in indices]
+    tensor = _frames_to_tensor(selected, frame_size)
 
-    frames = []
-    for path in selected:
-        img = Image.open(path).convert("RGB")
-        img = img.resize((frame_size, frame_size), Image.BILINEAR)
-        arr = np.array(img, dtype=np.float32) / 255.0
-        arr = arr * 2.0 - 1.0
-        frames.append(arr)
-
-    video = np.stack(frames)
-    video = video.transpose(3, 0, 1, 2)
-    tensor = torch.from_numpy(video).unsqueeze(0)
-
-    logger.info(
-        "Loaded %d/%d frames from '%s'",
+    logger.warning(
+        "load_video_frames() uses sparse linspace sampling (non-paper). "
+        "Prefer load_clip_around_frame(). Loaded %d/%d frames from '%s'",
         num_frames,
         len(all_paths),
         os.path.basename(video_dir),

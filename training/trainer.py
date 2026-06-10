@@ -54,10 +54,9 @@ class Trainer:
         tcfg = cfg.train
 
         # ---- Sanity check on first batch ----
-        # For logistic loss log(1+exp(-S*Y)) at init, S≈0 → expected loss ≈ ln(2)≈0.693
         self._sanity_check(model, train_loader, device, cfg)
 
-        model.train()
+        self._set_train_mode(model)
         step = 0
         running_loss = 0.0
         best_val_loss = math.inf
@@ -70,9 +69,9 @@ class Trainer:
                 if step >= tcfg.total_iters:
                     break
 
-                video = video.to(device)         # (B, 3, N, H, W)
+                video = video.to(device)  # (B, 3, N, H, W)
                 embedding = embedding.to(device)  # (B, max_len, 300)
-                mask = mask.to(device)            # (B, 1, 512, 512) in {0,1}
+                mask = mask.to(device)  # (B, 1, 512, 512) in {0,1}
 
                 # L = sum_r alpha_r * mean_ij log(1 + exp(-S_r_ij * Y_r_ij))  §3.4
                 responses: Dict[int, Tensor] = model(video, embedding)
@@ -82,7 +81,7 @@ class Trainer:
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                scheduler.step()   # per-iteration — divides lr at exactly step 5k/10k
+                scheduler.step()  # per-iteration — divides lr at exactly step 5k/10k
 
                 step += 1
                 running_loss += loss.item()
@@ -98,14 +97,21 @@ class Trainer:
                 # ---- Checkpoint ----
                 if step % tcfg.save_every == 0:
                     val_loss = self._eval_loss(model, val_loader, device, cfg)
-                    self._save_checkpoint(model, optimizer, scheduler, step, val_loss, cfg)
+                    self._save_checkpoint(
+                        model, optimizer, scheduler, step, val_loss, cfg
+                    )
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
                         self._save_checkpoint(
-                            model, optimizer, scheduler, step, val_loss, cfg,
+                            model,
+                            optimizer,
+                            scheduler,
+                            step,
+                            val_loss,
+                            cfg,
                             filename="best_model.pt",
                         )
-                    model.train()
+                    self._set_train_mode(model)
 
                 pbar.update(1)
 
@@ -114,7 +120,12 @@ class Trainer:
         # Final checkpoint
         val_loss = self._eval_loss(model, val_loader, device, cfg)
         self._save_checkpoint(
-            model, optimizer, scheduler, step, val_loss, cfg,
+            model,
+            optimizer,
+            scheduler,
+            step,
+            val_loss,
+            cfg,
             filename="final_model.pt",
         )
         logger.info("Training complete — final val_loss=%.4f", val_loss)
@@ -122,6 +133,26 @@ class Trainer:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _set_train_mode(model: torch.nn.Module) -> None:
+        """
+        Put the model in train mode WITHOUT letting the I3D BatchNorm
+        running statistics drift.
+
+        A bare model.train() flips every BatchNorm in the (mostly frozen)
+        I3D backbone into train mode: their weights can't update (requires_
+        grad=False) but their running mean/var WOULD keep updating from our
+        small batches, silently corrupting the pre-trained statistics.
+
+        Fix: train() everything, then force the whole I3D backbone back to
+        eval(). Mixed_4f's conv weights still receive gradients and still
+        train — eval mode only freezes the BN statistics, which is the
+        standard, stable choice when fine-tuning a small part of a
+        pre-trained backbone with small batch sizes.
+        """
+        model.train()
+        model.video_encoder.i3d.eval()
 
     @torch.no_grad()
     def _sanity_check(
@@ -133,7 +164,8 @@ class Trainer:
     ) -> None:
         """
         One-batch sanity check before training.
-        At init, dynamic filters ≈ 0 → S≈0 → expected loss ≈ ln(2) ≈ 0.693.
+        At init, dynamic filters ≈ 0 → S≈0 → each resolution term ≈ ln(2),
+        total ≈ ln(2) × Σ alphas (≈ 2.08 for the default three α=1 terms).
         """
         model.eval()
         video, embedding, mask = next(iter(loader))
@@ -145,13 +177,17 @@ class Trainer:
         targets = make_multiscale_targets(mask)
         loss = multiresolution_loss(responses, targets, cfg.loss.alphas)
 
-        expected = 0.693   # ln(2) for balanced random logits
+        # L = Σ_r α_r · mean log(1+exp(-S·Y)); at init S≈0 → each term ≈ ln 2,
+        # so the expected TOTAL is ln(2) × Σ α_r (≈ 2.079 for three α=1 terms),
+        # not 0.693 — that would be the per-resolution value.
+        alphas = cfg.loss.alphas or {32: 1.0, 128: 1.0, 512: 1.0}
+        expected = math.log(2.0) * sum(alphas.values())
         logger.info(
             "Sanity check — loss=%.4f  (expected ≈ %.3f for random init)",
             loss.item(),
             expected,
         )
-        model.train()
+        self._set_train_mode(model)
 
     @torch.no_grad()
     def _eval_loss(

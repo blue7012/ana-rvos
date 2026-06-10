@@ -15,7 +15,7 @@ from PIL import Image
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from data.preprocessing import sentence_to_embedding
+from data.preprocessing import dense_window_indices, sentence_to_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +96,7 @@ class YouTubeVOSDataset(Dataset):
             return self._samples_from_valid()
         return self._samples_from_train(val_fraction, seed)
 
-    def _samples_from_train(
-        self, val_fraction: float, seed: int
-    ) -> List[Dict]:
+    def _samples_from_train(self, val_fraction: float, seed: int) -> List[Dict]:
         """
         Source: train/meta_expressions.json
 
@@ -112,7 +110,7 @@ class YouTubeVOSDataset(Dataset):
         with open(meta_path, encoding="utf-8") as f:
             meta = json.load(f)
 
-        all_vid_ids = sorted(meta["videos"].keys())   # sorted → deterministic base
+        all_vid_ids = sorted(meta["videos"].keys())  # sorted → deterministic base
         rng = random.Random(seed)
         rng.shuffle(all_vid_ids)
 
@@ -123,13 +121,13 @@ class YouTubeVOSDataset(Dataset):
             keep = set(all_vid_ids[:-n_val])
 
         samples: List[Dict] = []
-        for vid_id in sorted(keep):          # sorted again for stable ordering
+        for vid_id in sorted(keep):  # sorted again for stable ordering
             for obj_id, odata in meta["videos"][vid_id]["objects"].items():
                 for expr in odata.get("expressions", []):
                     samples.append(
                         {
                             "video_id": vid_id,
-                            "obj_id": obj_id,    # str "1"/"2"/… used for palette mask
+                            "obj_id": obj_id,  # str "1"/"2"/… used for palette mask
                             "expression": expr,
                             "frames": odata["frames"],
                             "expr_id": None,
@@ -164,7 +162,7 @@ class YouTubeVOSDataset(Dataset):
                         "obj_id": str(edata["obj_id"]),
                         "expression": edata["exp"],
                         "frames": frames,
-                        "expr_id": expr_id,   # matches annotation subdir name
+                        "expr_id": expr_id,  # matches annotation subdir name
                         "_anno_dir": "valid",
                     }
                 )
@@ -185,15 +183,27 @@ class YouTubeVOSDataset(Dataset):
             mask:      (1, 512, 512)  float32 in {0, 1}
         """
         s = self.samples[idx]
-
-        # Sample N evenly-spaced frames; np.linspace repeats when clip is short.
         frames: List[str] = s["frames"]
-        indices = np.linspace(0, len(frames) - 1, self.num_frames, dtype=int)
+
+        # 1. Pick the frame to be segmented — the clip's CENTER.
+        #    train: random annotated stem  → each epoch sees different windows
+        #    val/test: middle stem         → deterministic, reproducible loss
+        if self.subset == "train":
+            center = random.randrange(len(frames))
+        else:
+            center = len(frames) // 2
+
+        # 2. Dense window of N consecutive stems around it (Paper §3.4, §5.2:
+        #    "16 frames around the frame to be segmented"). Edges are clamped,
+        #    so boundary frames repeat for centers near the start/end.
+        indices = dense_window_indices(len(frames), center, self.num_frames)
         stems = [frames[i] for i in indices]
 
-        video = self._load_frames(s["_anno_dir"], s["video_id"], stems)   # (3, N, H, W)
-        mask = self._load_mask(s, stems[self.num_frames // 2])             # (1, 512, 512)
-        embedding = self._embeddings[idx]                                   # (max_len, 300)
+        video = self._load_frames(s["_anno_dir"], s["video_id"], stems)  # (3, N, H, W)
+        # 3. Ground truth = mask of the CENTER frame (Paper §3.4: "the frame
+        #    in the middle of each input video clip").
+        mask = self._load_mask(s, frames[center])  # (1, 512, 512)
+        embedding = self._embeddings[idx]  # (max_len, 300)
 
         return video, embedding, mask
 
@@ -201,9 +211,7 @@ class YouTubeVOSDataset(Dataset):
     # Frame and mask loaders
     # ------------------------------------------------------------------
 
-    def _load_frames(
-        self, split_dir: str, video_id: str, stems: List[str]
-    ) -> Tensor:
+    def _load_frames(self, split_dir: str, video_id: str, stems: List[str]) -> Tensor:
         """
         Load N JPEG frames → (frame_size × frame_size) → normalise to [-1, 1].
 
@@ -215,13 +223,13 @@ class YouTubeVOSDataset(Dataset):
             img = (
                 Image.open(os.path.join(frame_dir, stem + ".jpg"))
                 .convert("RGB")
-                .resize((self.frame_size, self.frame_size), Image.BILINEAR)
+                .resize((self.frame_size, self.frame_size), Image.Resampling.BILINEAR)
             )
-            arr = np.array(img, dtype=np.float32) / 255.0 * 2.0 - 1.0   # [-1, 1]
-            frames.append(arr)   # (H, W, 3)
+            arr = np.array(img, dtype=np.float32) / 255.0 * 2.0 - 1.0  # [-1, 1]
+            frames.append(arr)  # (H, W, 3)
 
-        clip = np.stack(frames)              # (N, H, W, 3)
-        clip = clip.transpose(3, 0, 1, 2)   # (3, N, H, W)
+        clip = np.stack(frames)  # (N, H, W, 3)
+        clip = clip.transpose(3, 0, 1, 2)  # (3, N, H, W)
         return torch.from_numpy(clip)
 
     def _load_mask(self, sample: Dict, stem: str) -> Tensor:
@@ -235,21 +243,28 @@ class YouTubeVOSDataset(Dataset):
         """
         if sample["_anno_dir"] == "train":
             anno_path = os.path.join(
-                self.root, "train", "Annotations",
-                sample["video_id"], stem + ".png",
+                self.root,
+                "train",
+                "Annotations",
+                sample["video_id"],
+                stem + ".png",
             )
-            arr = np.array(Image.open(anno_path))          # (H, W) palette values
+            arr = np.array(Image.open(anno_path))  # (H, W) palette values
             binary = (arr == int(sample["obj_id"])).astype(np.float32)
         else:
             anno_path = os.path.join(
-                self.root, "valid", "Annotations",
-                sample["video_id"], sample["expr_id"], stem + ".png",
+                self.root,
+                "valid",
+                "Annotations",
+                sample["video_id"],
+                sample["expr_id"],
+                stem + ".png",
             )
-            arr = np.array(Image.open(anno_path))          # (H, W) {0, 255}
+            arr = np.array(Image.open(anno_path))  # (H, W) {0, 255}
             binary = (arr > 0).astype(np.float32)
 
-        mask = torch.from_numpy(binary)[None, None]        # (1, 1, H, W)
-        mask = F.interpolate(
-            mask, size=(512, 512), mode="nearest"
-        ).squeeze(0)                                       # (1, 512, 512)
+        mask = torch.from_numpy(binary)[None, None]  # (1, 1, H, W)
+        mask = F.interpolate(mask, size=(512, 512), mode="nearest").squeeze(
+            0
+        )  # (1, 512, 512)
         return mask
