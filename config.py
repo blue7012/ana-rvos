@@ -14,7 +14,7 @@ class TrainConfig:
     total_iters: int = 15000  # Paper §3.4
     batch_size: int = 2  # ⚠️ not in paper — GPU memory constraint (🟡)
     num_workers: int = 2  # ⚠️ not in paper (🟢)
-    save_every: int = 1000  # ⚠️ not in paper — checkpoint cadence (🟢)
+    save_every: int = 2000  # ⚠️ not in paper — checkpoint cadence (🟢)
     log_every: int = 50  # ⚠️ not in paper — log cadence (🟢)
     checkpoint_dir: str = "checkpoints"
     split: str = "train"  # which YouTube-VOS split to train on
